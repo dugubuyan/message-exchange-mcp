@@ -73,6 +73,7 @@ pip install -r requirements.txt
 
 ## 使用示例
 
+https://github.com/user-attachments/assets/0d42f2be-404c-405d-ad9b-1930110cee1a
 
 
 
