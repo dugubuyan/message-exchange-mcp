@@ -27,69 +27,54 @@ logger = logging.getLogger("gradio-message-service-mcp")
 BASE_URL = "http://localhost:8000"
 server = Server("gradio-message-service-mcp")
 
-# 用户ID持久化配置
-USER_DATA_DIR = Path.home() / ".kiro" / "mcp" / "gradio-message-service"
-USER_ID_FILE = USER_DATA_DIR / "user_id.json"
-
 class UserManager:
-    """用户管理器，负责用户ID的持久化"""
+    """用户管理器，处理动态用户ID"""
     
     def __init__(self):
-        self.user_id = None
-        self.user_data = {}
-        self._ensure_data_dir()
-        self._load_user_data()
+        self.default_user_id = None
+        self.session_users = {}  # 临时存储会话用户信息
     
-    def _ensure_data_dir(self):
-        """确保数据目录存在"""
-        USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    def get_or_create_user_id(self, provided_user_id: str = None) -> str:
+        """获取或创建用户ID"""
+        if provided_user_id:
+            # 如果agent提供了user_id，直接使用
+            if provided_user_id not in self.session_users:
+                self.session_users[provided_user_id] = {
+                    'user_id': provided_user_id,
+                    'created_at': time.time(),
+                    'display_name': f"用户_{provided_user_id[:8]}"
+                }
+                logger.info(f"注册新用户: {provided_user_id}")
+            return provided_user_id
+        else:
+            # 如果没有提供user_id，生成一个新的
+            if not self.default_user_id:
+                self.default_user_id = str(uuid.uuid4())
+                self.session_users[self.default_user_id] = {
+                    'user_id': self.default_user_id,
+                    'created_at': time.time(),
+                    'display_name': f"临时用户_{self.default_user_id[:8]}"
+                }
+                logger.info(f"生成临时用户ID: {self.default_user_id}")
+            return self.default_user_id
     
-    def _load_user_data(self):
-        """加载用户数据"""
-        try:
-            if USER_ID_FILE.exists():
-                with open(USER_ID_FILE, 'r', encoding='utf-8') as f:
-                    self.user_data = json.load(f)
-                    self.user_id = self.user_data.get('user_id')
-                    logger.info(f"加载已存在的用户ID: {self.user_id}")
-            
-            if not self.user_id:
-                self._generate_new_user_id()
-        except Exception as e:
-            logger.error(f"加载用户数据失败: {e}")
-            self._generate_new_user_id()
+    def get_user_info(self, user_id: str = None) -> dict:
+        """获取用户信息"""
+        target_user_id = user_id or self.default_user_id
+        if target_user_id and target_user_id in self.session_users:
+            return self.session_users[target_user_id]
+        else:
+            # 如果用户不存在，创建一个临时的
+            return {
+                'user_id': target_user_id or 'unknown',
+                'created_at': time.time(),
+                'display_name': f"未知用户_{(target_user_id or 'unknown')[:8]}"
+            }
     
-    def _generate_new_user_id(self):
-        """生成新的用户ID"""
-        self.user_id = str(uuid.uuid4())
-        self.user_data = {
-            'user_id': self.user_id,
-            'created_at': time.time(),
-            'display_name': f"用户_{self.user_id[:8]}"
-        }
-        self._save_user_data()
-        logger.info(f"生成新用户ID: {self.user_id}")
-    
-    def _save_user_data(self):
-        """保存用户数据"""
-        try:
-            with open(USER_ID_FILE, 'w', encoding='utf-8') as f:
-                json.dump(self.user_data, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            logger.error(f"保存用户数据失败: {e}")
-    
-    def get_user_id(self) -> str:
-        """获取当前用户ID"""
-        return self.user_id
-    
-    def get_display_name(self) -> str:
+    def get_display_name(self, user_id: str = None) -> str:
         """获取用户显示名称"""
-        return self.user_data.get('display_name', f"用户_{self.user_id[:8]}")
-    
-    def update_display_name(self, name: str):
-        """更新用户显示名称"""
-        self.user_data['display_name'] = name
-        self._save_user_data()
+        user_info = self.get_user_info(user_id)
+        return user_info.get('display_name', f"用户_{(user_id or 'unknown')[:8]}")
 
 # 全局用户管理器
 user_manager = UserManager()
@@ -164,28 +149,28 @@ class MessageServiceClient:
 # 全局客户端实例
 message_client = MessageServiceClient()
 
-# Gradio界面函数（使用同步请求和自动用户ID）
-def subscribe_topic_ui(topic: str):
+# Gradio界面函数（使用同步请求和动态用户ID）
+def subscribe_topic_ui(topic: str, user_id: str = None):
     """订阅topic的UI函数"""
     try:
-        user_id = user_manager.get_user_id()
+        actual_user_id = user_manager.get_or_create_user_id(user_id)
         result = message_client._make_sync_request(
             "POST", "/topics/subscribe",
-            json={"user_id": user_id, "topic": topic}
+            json={"user_id": actual_user_id, "topic": topic}
         )
-        return f"🎉 成功加入{topic}话题! {json.dumps(result, ensure_ascii=False, indent=2)}"
+        return f"🎉 用户 {actual_user_id[:8]}... 成功加入{topic}话题! {json.dumps(result, ensure_ascii=False, indent=2)}"
     except Exception as e:
         return f"❌ 加入社区失败: {str(e)}"
 
-def unsubscribe_topic_ui(topic: str):
+def unsubscribe_topic_ui(topic: str, user_id: str = None):
     """取消订阅topic的UI函数"""
     try:
-        user_id = user_manager.get_user_id()
+        actual_user_id = user_manager.get_or_create_user_id(user_id)
         result = message_client._make_sync_request(
             "POST", "/topics/unsubscribe",
-            json={"user_id": user_id, "topic": topic}
+            json={"user_id": actual_user_id, "topic": topic}
         )
-        return f"👋 已离开{topic}话题 {json.dumps(result, ensure_ascii=False, indent=2)}"
+        return f"👋 用户 {actual_user_id[:8]}... 已离开{topic}话题 {json.dumps(result, ensure_ascii=False, indent=2)}"
     except Exception as e:
         return f"❌ 离开社区失败: {str(e)}"
 
@@ -197,12 +182,12 @@ def get_topics_ui():
     except Exception as e:
         return f"❌ 获取topics失败: {str(e)}"
 
-def publish_request_ui(topic: str, title: str, content: str):
+def publish_request_ui(topic: str, title: str, content: str, user_id: str = None):
     """发布需求消息的UI函数"""
     try:
-        user_id = user_manager.get_user_id()
+        actual_user_id = user_manager.get_or_create_user_id(user_id)
         payload = {
-            "user_id": user_id,
+            "user_id": actual_user_id,
             "topic": topic,
             "content": content
         }
@@ -212,32 +197,32 @@ def publish_request_ui(topic: str, title: str, content: str):
         result = message_client._make_sync_request(
             "POST", "/requests/publish", json=payload
         )
-        return f"🚀 帖子发布成功! {json.dumps(result, ensure_ascii=False, indent=2)}"
+        return f"🚀 用户 {actual_user_id[:8]}... 帖子发布成功! {json.dumps(result, ensure_ascii=False, indent=2)}"
     except Exception as e:
         return f"❌ 发布失败: {str(e)}"
 
-def publish_response_ui(request_id: str, content: str):
+def publish_response_ui(request_id: str, content: str, user_id: str = None):
     """发布应答消息的UI函数"""
     try:
-        user_id = user_manager.get_user_id()
+        actual_user_id = user_manager.get_or_create_user_id(user_id)
         result = message_client._make_sync_request(
             "POST", "/responses/publish",
             json={
-                "user_id": user_id,
+                "user_id": actual_user_id,
                 "request_id": request_id,
                 "content": content
             }
         )
-        return f"💬 回复发布成功! {json.dumps(result, ensure_ascii=False, indent=2)}"
+        return f"💬 用户 {actual_user_id[:8]}... 回复发布成功! {json.dumps(result, ensure_ascii=False, indent=2)}"
     except Exception as e:
         return f"❌ 应答发布失败: {str(e)}"
 
-def get_my_requests_ui():
+def get_my_requests_ui(user_id: str = None):
     """获取我发布的需求消息"""
     try:
-        user_id = user_manager.get_user_id()
+        actual_user_id = user_manager.get_or_create_user_id(user_id)
         requests = message_client._make_sync_request(
-            "GET", f"/users/{user_id}/requests"
+            "GET", f"/users/{actual_user_id}/requests"
         )
         
         # 检查返回的数据类型
@@ -273,12 +258,12 @@ def get_my_requests_ui():
     except Exception as e:
         return f"❌ 获取我的需求失败: {str(e)}"
 
-def get_my_responses_ui():
+def get_my_responses_ui(user_id: str = None):
     """获取我收到的应答消息"""
     try:
-        user_id = user_manager.get_user_id()
+        actual_user_id = user_manager.get_or_create_user_id(user_id)
         responses = message_client._make_sync_request(
-            "GET", f"/users/{user_id}/received/responses"
+            "GET", f"/users/{actual_user_id}/received/responses"
         )
         
         # 检查返回的数据类型
@@ -313,12 +298,12 @@ def get_my_responses_ui():
     except Exception as e:
         return f"❌ 获取我的应答失败: {str(e)}"
 
-def get_subscribed_requests_ui():
+def get_subscribed_requests_ui(user_id: str = None):
     """获取我订阅的topic收到的需求消息"""
     try:
-        user_id = user_manager.get_user_id()
+        actual_user_id = user_manager.get_or_create_user_id(user_id)
         received_requests = message_client._make_sync_request(
-            "GET", f"/users/{user_id}/received/requests"
+            "GET", f"/users/{actual_user_id}/received/requests"
         )
         
         # 检查返回的数据类型
@@ -355,29 +340,29 @@ def get_subscribed_requests_ui():
     except Exception as e:
         return f"❌ 获取订阅需求失败: {str(e)}"
 
-def get_user_info_ui():
+def get_user_info_ui(user_id: str = None):
     """获取当前用户信息的UI函数"""
     try:
-        user_id = user_manager.get_user_id()
+        actual_user_id = user_manager.get_or_create_user_id(user_id)
         
         # 获取用户的订阅
         subscriptions_response = message_client._make_sync_request(
-            "GET", f"/users/{user_id}/subscriptions"
+            "GET", f"/users/{actual_user_id}/subscriptions"
         )
         
         # 获取用户的需求
         requests_response = message_client._make_sync_request(
-            "GET", f"/users/{user_id}/requests"
+            "GET", f"/users/{actual_user_id}/requests"
         )
         
         # 获取收到的需求消息
         received_requests_response = message_client._make_sync_request(
-            "GET", f"/users/{user_id}/received/requests"
+            "GET", f"/users/{actual_user_id}/received/requests"
         )
         
         # 获取收到的应答消息
         received_responses_response = message_client._make_sync_request(
-            "GET", f"/users/{user_id}/received/responses"
+            "GET", f"/users/{actual_user_id}/received/responses"
         )
         
         # 处理订阅数据的格式
@@ -417,8 +402,8 @@ def get_user_info_ui():
             received_replies_count = len(received_responses_response)
         
         info = {
-            "用户ID": user_id,
-            "用户名": user_manager.get_display_name(),
+            "用户ID": actual_user_id,
+            "用户名": user_manager.get_display_name(actual_user_id),
             "加入的话题数": subscription_count,
             "发布的帖子数": published_posts_count,
             "Feed中的帖子数": feed_posts_count,
@@ -526,12 +511,12 @@ def sync_test_connection():
         return test_connection_ui()
     except Exception as e:
         return f"❌ 连接测试失败: {str(e)}"
-def get_available_post_ids():
+def get_available_post_ids(user_id: str = None):
     """获取用户Feed中可用的帖子ID列表，用于自动补全"""
     try:
-        user_id = user_manager.get_user_id()
+        actual_user_id = user_manager.get_or_create_user_id(user_id)
         received_requests_response = message_client._make_sync_request(
-            "GET", f"/users/{user_id}/received/requests"
+            "GET", f"/users/{actual_user_id}/received/requests"
         )
         
         post_ids = []
@@ -554,12 +539,12 @@ def get_available_post_ids():
         logger.error(f"获取帖子ID列表失败: {e}")
         return []
 
-def validate_post_id_in_subscribed_topics(post_id: str):
+def validate_post_id_in_subscribed_topics(post_id: str, user_id: str = None):
     """验证帖子ID是否在用户关注的话题中"""
     try:
-        user_id = user_manager.get_user_id()
+        actual_user_id = user_manager.get_or_create_user_id(user_id)
         received_requests_response = message_client._make_sync_request(
-            "GET", f"/users/{user_id}/received/requests"
+            "GET", f"/users/{actual_user_id}/received/requests"
         )
         
         # 检查帖子ID是否在用户的Feed中
@@ -608,7 +593,7 @@ def create_gradio_interface():
         # 用户信息和连接测试区域
         with gr.Row():
             with gr.Column(scale=2):
-                gr.Markdown(f"**用户**: {user_manager.get_display_name()} (`{user_manager.get_user_id()[:8]}...`)")
+                gr.Markdown("**用户**: 动态分配 (由 MCP agent 提供)")
                 gr.Markdown(f"**服务器状态**: `{BASE_URL}`")
             with gr.Column(scale=1):
                 test_conn_btn = gr.Button("🔗 检查连接", variant="secondary", size="sm")
@@ -648,7 +633,7 @@ def create_gradio_interface():
                     
                     with gr.Column():
                         gr.Markdown("### 加入/离开社区")
-                        gr.Markdown(f"*当前用户: {user_manager.get_user_id()[:8]}...*")
+                        gr.Markdown("*用户ID由 MCP agent 动态提供*")
                         topic_sub = gr.Textbox(label="话题名称", placeholder="输入话题名称")
                         
                         with gr.Row():
@@ -677,7 +662,7 @@ def create_gradio_interface():
                 with gr.Row():
                     with gr.Column():
                         gr.Markdown("### 📝 创建新帖子")
-                        gr.Markdown(f"*发帖用户: {user_manager.get_user_id()[:8]}...*")
+                        gr.Markdown("*发帖用户: 由 MCP agent 动态提供*")
                         topic_req = gr.Textbox(label="选择话题", placeholder="输入话题名称")
                         title_req = gr.Textbox(label="帖子标题", placeholder="给你的帖子起个吸引人的标题")
                         content_req = gr.Textbox(
@@ -715,7 +700,7 @@ def create_gradio_interface():
                     
                     with gr.Column():
                         gr.Markdown("### 💬 回复帖子")
-                        gr.Markdown(f"*回复用户: {user_manager.get_user_id()[:8]}...*")
+                        gr.Markdown("*回复用户: 由 MCP agent 动态提供*")
                         gr.Markdown("💡 *选择要回复的帖子，或手动输入帖子ID*")
                         
                         # 刷新可选帖子按钮
@@ -757,9 +742,10 @@ def create_gradio_interface():
                         def get_available_posts_with_info():
                             """获取可回复帖子的详细信息，用于下拉选择"""
                             try:
-                                user_id = user_manager.get_user_id()
+                                # 使用默认用户ID获取帖子信息
+                                temp_user_id = user_manager.get_or_create_user_id()
                                 received_requests_response = message_client._make_sync_request(
-                                    "GET", f"/users/{user_id}/received/requests"
+                                    "GET", f"/users/{temp_user_id}/received/requests"
                                 )
                                 
                                 posts_info = []
@@ -913,10 +899,326 @@ def create_gradio_interface():
     
     return demo
 
-async def main():
-   app = create_gradio_interface()
-   # 启动界面（阻塞）
-   app.launch(mcp_server=True, server_port=7860)
-   
+# MCP工具定义
+@server.list_tools()
+async def handle_list_tools() -> List[types.Tool]:
+    """列出所有可用的工具"""
+    return [
+        types.Tool(
+            name="launch_gradio_interface",
+            description="启动Gradio Web界面",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "port": {"type": "integer", "description": "Web界面端口号", "default": 7860},
+                    "share": {"type": "boolean", "description": "是否创建公共链接", "default": False}
+                },
+                "required": []
+            }
+        ),
+        types.Tool(
+            name="subscribe_topic",
+            description="订阅指定的topic",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string", "description": "用户ID（可选，如果不提供会自动生成）"},
+                    "topic": {"type": "string", "description": "要订阅的topic名称"}
+                },
+                "required": ["topic"]
+            }
+        ),
+        types.Tool(
+            name="unsubscribe_topic",
+            description="取消订阅指定的topic",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string", "description": "用户ID（可选，如果不提供会自动生成）"},
+                    "topic": {"type": "string", "description": "要取消订阅的topic名称"}
+                },
+                "required": ["topic"]
+            }
+        ),
+        types.Tool(
+            name="get_topics",
+            description="获取所有可用的topic信息",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        ),
+        types.Tool(
+            name="publish_request",
+            description="发布需求消息",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string", "description": "发布者用户ID（可选，如果不提供会自动生成）"},
+                    "topic": {"type": "string", "description": "消息topic"},
+                    "content": {"type": "string", "description": "消息内容"},
+                    "title": {"type": "string", "description": "消息标题（可选）"}
+                },
+                "required": ["topic", "content"]
+            }
+        ),
+        types.Tool(
+            name="publish_response",
+            description="发布回复消息",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string", "description": "回复者用户ID（可选，如果不提供会自动生成）"},
+                    "request_id": {"type": "string", "description": "要回复的帖子ID"},
+                    "content": {"type": "string", "description": "回复内容"}
+                },
+                "required": ["request_id", "content"]
+            }
+        ),
+        types.Tool(
+            name="get_user_info",
+            description="获取用户信息",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string", "description": "用户ID（可选，如果不提供会自动生成）"}
+                },
+                "required": []
+            }
+        ),
+        types.Tool(
+            name="get_my_requests",
+            description="获取用户发布的帖子",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string", "description": "用户ID（可选，如果不提供会自动生成）"}
+                },
+                "required": []
+            }
+        ),
+        types.Tool(
+            name="get_my_responses",
+            description="获取用户收到的回复",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string", "description": "用户ID（可选，如果不提供会自动生成）"}
+                },
+                "required": []
+            }
+        ),
+        types.Tool(
+            name="get_subscribed_requests",
+            description="获取用户订阅话题的帖子",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string", "description": "用户ID（可选，如果不提供会自动生成）"}
+                },
+                "required": []
+            }
+        ),
+        types.Tool(
+            name="get_stats",
+            description="获取系统统计信息",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        )
+    ]
+
+@server.call_tool()
+async def handle_call_tool(
+    name: str, arguments: dict | None
+) -> List[types.TextContent]:
+    """处理工具调用"""
+    if arguments is None:
+        arguments = {}
+    
+    try:
+        if name == "launch_gradio_interface":
+            port = arguments.get("port", 7860)
+            share = arguments.get("share", False)
+            
+            # 在新线程中启动Gradio界面
+            def run_gradio():
+                demo = create_gradio_interface()
+                demo.launch(server_port=port, share=share, inbrowser=True)
+            
+            thread = threading.Thread(target=run_gradio, daemon=True)
+            thread.start()
+            
+            return [types.TextContent(
+                type="text",
+                text=f"✅ Gradio界面已启动！\n访问地址: http://localhost:{port}\n{'公共链接已创建' if share else '仅本地访问'}"
+            )]
+            
+        elif name == "subscribe_topic":
+            try:
+                user_id = arguments.get("user_id")
+                topic = arguments["topic"]
+                result = subscribe_topic_ui(topic, user_id)
+                return [types.TextContent(type="text", text=result)]
+            except Exception as e:
+                logger.error(f"订阅话题失败: {e}")
+                return [types.TextContent(type="text", text=f"订阅失败: {str(e)}")]
+                
+        elif name == "unsubscribe_topic":
+            try:
+                user_id = arguments.get("user_id")
+                topic = arguments["topic"]
+                result = unsubscribe_topic_ui(topic, user_id)
+                return [types.TextContent(type="text", text=result)]
+            except Exception as e:
+                logger.error(f"取消订阅失败: {e}")
+                return [types.TextContent(type="text", text=f"取消订阅失败: {str(e)}")]
+            
+        elif name == "get_topics":
+            try:
+                result = get_topics_ui()
+                return [types.TextContent(type="text", text=result)]
+            except Exception as e:
+                logger.error(f"获取话题失败: {e}")
+                return [types.TextContent(type="text", text=f"获取话题失败: {str(e)}")]
+            
+        elif name == "publish_request":
+            try:
+                user_id = arguments.get("user_id")
+                topic = arguments["topic"]
+                content = arguments["content"]
+                title = arguments.get("title", "")
+                result = publish_request_ui(topic, title, content, user_id)
+                return [types.TextContent(type="text", text=result)]
+            except Exception as e:
+                logger.error(f"发布帖子失败: {e}")
+                return [types.TextContent(type="text", text=f"发布失败: {str(e)}")]
+                
+        elif name == "publish_response":
+            try:
+                user_id = arguments.get("user_id")
+                request_id = arguments["request_id"]
+                content = arguments["content"]
+                result = publish_response_ui(request_id, content, user_id)
+                return [types.TextContent(type="text", text=result)]
+            except Exception as e:
+                logger.error(f"发布回复失败: {e}")
+                return [types.TextContent(type="text", text=f"回复失败: {str(e)}")]
+                
+        elif name == "get_user_info":
+            try:
+                user_id = arguments.get("user_id")
+                result = get_user_info_ui(user_id)
+                return [types.TextContent(type="text", text=result)]
+            except Exception as e:
+                logger.error(f"获取用户信息失败: {e}")
+                return [types.TextContent(type="text", text=f"获取用户信息失败: {str(e)}")]
+                
+        elif name == "get_my_requests":
+            try:
+                user_id = arguments.get("user_id")
+                result = get_my_requests_ui(user_id)
+                return [types.TextContent(type="text", text=result)]
+            except Exception as e:
+                logger.error(f"获取我的帖子失败: {e}")
+                return [types.TextContent(type="text", text=f"获取我的帖子失败: {str(e)}")]
+                
+        elif name == "get_my_responses":
+            try:
+                user_id = arguments.get("user_id")
+                result = get_my_responses_ui(user_id)
+                return [types.TextContent(type="text", text=result)]
+            except Exception as e:
+                logger.error(f"获取我的回复失败: {e}")
+                return [types.TextContent(type="text", text=f"获取我的回复失败: {str(e)}")]
+                
+        elif name == "get_subscribed_requests":
+            try:
+                user_id = arguments.get("user_id")
+                result = get_subscribed_requests_ui(user_id)
+                return [types.TextContent(type="text", text=result)]
+            except Exception as e:
+                logger.error(f"获取订阅帖子失败: {e}")
+                return [types.TextContent(type="text", text=f"获取订阅帖子失败: {str(e)}")]
+            
+        elif name == "get_stats":
+            try:
+                result = get_stats_ui()
+                return [types.TextContent(type="text", text=result)]
+            except Exception as e:
+                logger.error(f"获取统计失败: {e}")
+                # 如果外部服务不可用，返回本地统计
+                local_stats = {
+                    "status": "partial",
+                    "message": "外部服务不可用，显示本地信息",
+                    "local_stats": {
+                        "mcp_server": "运行中",
+                        "session_users": len(user_manager.session_users),
+                        "service_status": "MCP服务运行中"
+                    }
+                }
+                return [types.TextContent(type="text", text=json.dumps(local_stats, ensure_ascii=False, indent=2))]
+        
+        else:
+            return [types.TextContent(type="text", text=f"未知的工具: {name}")]
+        
+    except Exception as e:
+        logger.error(f"工具调用失败 {name}: {e}")
+        return [types.TextContent(
+            type="text",
+            text=f"错误: {str(e)}"
+        )]
+
+async def run_mcp_server():
+    """运行 MCP 服务器"""
+    async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
+        await server.run(
+            read_stream,
+            write_stream,
+            InitializationOptions(
+                server_name="gradio-message-service-mcp",
+                server_version="1.0.0",
+                capabilities=server.get_capabilities(
+                    notification_options=NotificationOptions(),
+                    experimental_capabilities={},
+                ),
+            ),
+        )
+
+async def run_gradio_with_mcp():
+    """同时运行 Gradio 界面和 MCP 服务器"""
+    # 在后台线程中启动 Gradio
+    def start_gradio():
+        app = create_gradio_interface()
+        app.launch(server_port=7860, share=False, inbrowser=False)
+    
+    gradio_thread = threading.Thread(target=start_gradio, daemon=True)
+    gradio_thread.start()
+    
+    # 等待 Gradio 启动
+    await asyncio.sleep(2)
+    logger.info("Gradio 界面已启动在 http://localhost:7860")
+    
+    # 运行 MCP 服务器（这会阻塞）
+    await run_mcp_server()
+
+def main():
+    """主函数 - 根据参数决定运行模式"""
+    import sys
+    
+    if len(sys.argv) > 1 and sys.argv[1] == "--mcp-only":
+        # 仅运行 MCP 服务器
+        asyncio.run(run_mcp_server())
+    elif len(sys.argv) > 1 and sys.argv[1] == "--gradio-only":
+        # 仅运行 Gradio 界面
+        app = create_gradio_interface()
+        app.launch(server_port=7860, share=False)
+    else:
+        # 同时运行两者
+        asyncio.run(run_gradio_with_mcp())
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
