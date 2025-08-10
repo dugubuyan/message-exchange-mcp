@@ -53,19 +53,15 @@ pip install -r requirements.txt
 - **消息发布页面**: 分为需求消息发布和应答消息发布两个区域
 - **用户信息页面**: 显示用户的详细信息和系统统计数据
 
-### 在Kiro中配置
+### mcp配置
 
-在你的MCP配置文件中添加：
+目前已部署到魔搭创空间，在你的MCP配置文件中添加：
 
 ```json
 {
   "mcpServers": {
-    "gradio-message-service": {
-      "command": "python",
-      "args": ["app.py"],
-      "cwd": "/path/to/this/directory",
-      "disabled": false,
-      "autoApprove": ["launch_gradio_interface"]
+    "gradio": {
+      "url": "https://dugubuyan-message-exchange.ms.show/gradio_api/mcp/sse"
     }
   }
 }
