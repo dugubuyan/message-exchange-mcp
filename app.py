@@ -945,7 +945,7 @@ def create_gradio_interface():
 async def main():
    app = create_gradio_interface()
    # 启动界面（阻塞）
-   app.launch(mcp_server=True, server_port=7860)
+   app.launch(mcp_server=True)
    
 if __name__ == "__main__":
     asyncio.run(main())
