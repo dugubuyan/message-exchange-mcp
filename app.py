@@ -29,7 +29,15 @@ server = Server("gradio-message-service-mcp")
 
 # 用户ID生成工具函数
 def generate_user_id():
-    """生成新的用户ID"""
+    """
+    generate user id.
+
+    Args:
+
+    Returns:
+        str: The uuid used as user id.
+    """
+
     return str(uuid.uuid4())
 
 def get_display_name(user_id: str) -> str:
